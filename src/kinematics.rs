@@ -65,35 +65,54 @@ impl Cable {
         // Get the axis that the pulley rotates around
         let pulley_axis = pulley_center.cross(&axis);
 
-        // iterate to get angle
-        let mut off_pulley = direct;
-        let mut angle_est = 0.0;
+        let center_to_end = end - (pivot + pulley_center);
 
-        for _ in 0..4 {
-            let angle_rotation =
-                UnitQuaternion::from_axis_angle(&Unit::new_normalize(pulley_axis), -angle_est);
-            let new_point = pivot + pulley_center - angle_rotation.transform_vector(&pulley_center);
-            // compute vector from pulley point to end point
-            off_pulley = end - new_point;
-            angle_est = off_pulley.angle(&axis);
-        }
+        // Find explicit solution for the tangent point in the 2D plane of the pulley
+        let ex = pulley_center.dot(&center_to_end) / rad;
+        let ey = axis.dot(&center_to_end) / rad;
+
+        let x = {
+            let r2 = rad * rad;
+            let ex2 = ex * ex;
+            let ey2 = ey * ey;
+            let i0 = ex * r2;
+            let i1 = (ey2 * r2 * (ex2 + ey2 - r2)).sqrt();
+            let i2 = ex2 + ey2;
+
+            if ey >= 0.0 {
+                (i0 - i1) / i2
+            } else {
+                (i0 + i1) / i2
+            }
+        };
+
+        let y = ex.signum() * (rad * rad - x * x).sqrt();
+
+        // calculate the pulley contact angle and the tangent point in 3D space
+        let angle_est = y.atan2(-x);
+
+        let tangent_point = pivot + (1.0 + x / rad) * pulley_center + (y / rad) * axis;
 
         // calculate the length of the wire
-        let len = off_pulley.norm() + angle_est * rad;
+        let len = (end - tangent_point).norm() + angle_est * rad;
+
 
         // generate line segments that make up the wire length
-        let mut seg = Vec::with_capacity(8);
+        const NUM_PULLEY_SEGMENTS : usize = 7;
+
+        let mut seg = Vec::with_capacity(NUM_PULLEY_SEGMENTS + 1);
         let mut last_point = pivot;
-        for i in 0..7 {
+
+        for i in 0..NUM_PULLEY_SEGMENTS {
             let rot = UnitQuaternion::from_axis_angle(
                 &Unit::new_normalize(pulley_axis),
-                i as f32 * -angle_est / 7.0,
+                i as f32 * -angle_est / (NUM_PULLEY_SEGMENTS as f32 - 1.0),
             );
             let new_point = pivot + pulley_center - rot.transform_vector(&pulley_center);
             seg.push((last_point, new_point));
             last_point = new_point;
         }
-        seg.push((last_point, end));
+        seg.push((tangent_point, end));
 
         (len, seg)
     }

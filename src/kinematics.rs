@@ -1,5 +1,5 @@
 use autodiff::{grad, Float, F};
-use na::{Unit, UnitQuaternion, Quaternion, Vector3};
+use na::{Unit, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use serde_json;
 
@@ -239,7 +239,7 @@ impl Kinematics {
     }
 
     pub fn forward(&self, _cable_lengths: &Vec<f32>, _previous_pose: &Pose) -> Pose {
-        const SGD_ROUNDS : usize = 16;
+        const SGD_ROUNDS : usize = 32;
         let mut rate = 0.1;
 
         let mut pose = Vec::with_capacity(6);
@@ -280,10 +280,10 @@ impl Kinematics {
             let g = grad(error_func, &pose);
 
             for i in 0..7 {
-                pose[i] -= if i >= 3 {100.} else {1.} * rate * g[i];
+                pose[i] -= if i >= 3 {500.} else {1.} * rate * g[i];
             }
 
-            rate *= 0.5;
+            rate *= 0.9;
         }
         let mut r = Pose::new();
         r.position = Vector3::new(pose[0] as f32, pose[1] as f32, pose[2] as f32);

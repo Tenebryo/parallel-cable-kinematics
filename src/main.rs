@@ -22,8 +22,8 @@ mod plot;
 use kinematics::{Kinematics, Pose};
 use plot::Plot;
 
-const NOISE_BIAS: f32 = 0.0;
-const NOISE_SCALE: f32 = 0.0;
+const NOISE_BIAS: f32 = 0.0001;
+const NOISE_SCALE: f32 = 0.00001;
 
 fn main() {
     let mut rng = thread_rng();
@@ -62,6 +62,10 @@ fn main() {
     let mut cable_length_noisy_plots = (0..(kin.num_cables()))
         .map(|_| Plot::new(data_points))
         .collect::<Vec<_>>();
+
+    let mut position_error_plot = Plot::new(data_points);
+    let mut orientation_error_plot = Plot::new(data_points);
+    let mut total_error_plot = Plot::new(data_points);
 
     let mut frame_time_plot = Plot::new(data_points);
     let error_distrs = (0..(kin.num_cables()))
@@ -113,6 +117,14 @@ fn main() {
         // update estimated pose with the new (noisy) cable lengths
         est_pose = kin.forward(&cable_lengths_noisy, &est_pose);
 
+        // calculate position and orientation error. Orientation error should be scaled
+        // by some amount because angles and lengths can't easily be compared
+        let position_error = (est_pose.position - pose.position).norm();
+        let orientation_error = 0.01 * est_pose.orientation.angle_to(&pose.orientation);
+        position_error_plot.add_point(position_error);
+        orientation_error_plot.add_point(orientation_error);
+        total_error_plot.add_point(position_error + orientation_error);
+
         // update the visualization
         c.set_local_rotation(pose.orientation);
         c.set_local_translation(Translation3::from(pose.position));
@@ -138,6 +150,7 @@ fn main() {
         }
         // update and draw cable length plots
         for (i, &l) in cable_lengths.iter().enumerate() {
+            // true cable lengths
             cable_length_plots[i].add_point(l);
             cable_length_plots[i].draw(
                 &mut window,
@@ -147,6 +160,7 @@ fn main() {
                 window_w as f32 / data_points as f32 * 0.5,
                 200.,
             );
+            // noisy cable lengths
             cable_length_noisy_plots[i].add_point(cable_lengths_noisy[i]);
             cable_length_noisy_plots[i].draw(
                 &mut window,
@@ -157,6 +171,34 @@ fn main() {
                 200.,
             );
         }
+
+        // plot the error statistics
+        position_error_plot.draw(
+            &mut window,
+            &Point3::new(1.0, 0.0, 1.0),
+            -0.25 * (window_w as f32),
+            -0.25 * (window_h as f32),
+            window_w as f32 / data_points as f32 * 0.5,
+            10000.0,
+        );
+
+        orientation_error_plot.draw(
+            &mut window,
+            &Point3::new(1.0, 1.0, 0.0),
+            -0.25 * (window_w as f32),
+            -0.25 * (window_h as f32),
+            window_w as f32 / data_points as f32 * 0.5,
+            10000.0,
+        );
+
+        total_error_plot.draw(
+            &mut window,
+            &Point3::new(0.0, 1.0, 1.0),
+            -0.25 * (window_w as f32),
+            -0.25 * (window_h as f32),
+            window_w as f32 / data_points as f32 * 0.5,
+            10000.0,
+        );
 
         // get and display framerate diagnostic information
         t += dt;

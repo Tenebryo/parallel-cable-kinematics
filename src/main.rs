@@ -21,7 +21,7 @@ mod plot;
 use kinematics::{Kinematics, Pose};
 use plot::Plot;
 
-const NOISE_SCALE: f32 = 0.005;
+const NOISE_SCALE: f32 = 0.002;
 
 fn main() {
     let mut rng = thread_rng();
@@ -37,10 +37,10 @@ fn main() {
 
     window.set_light(Light::StickToCamera);
 
-    let mut c = window.add_cube(kin.size[0], kin.size[1], kin.size[2]);
+    let mut c = window.add_cube(kin.stylus_size[0], kin.stylus_size[1], kin.stylus_size[2]);
     c.set_color(1.0, 0.0, 0.0);
     let sf = 1.02;
-    let mut est = window.add_cube(sf * kin.size[0], sf * kin.size[1], sf * kin.size[2]);
+    let mut est = window.add_cube(sf * kin.stylus_size[0], sf * kin.stylus_size[1], sf * kin.stylus_size[2]);
     est.set_color(0.5, 0.5, 1.0);
     est.set_lines_width(4.0);
     est.set_surface_rendering_activation(false);
@@ -109,7 +109,7 @@ fn main() {
         est.set_local_translation(Translation3::from(est_pose.position));
 
         // draw the cables
-        for (p1, p2) in kin.cable_ends(&pose) {
+        for (p1, p2) in kin.cable_segments(&pose) {
             window.draw_line(
                 &Point3::from(p1),
                 &Point3::from(p2),
@@ -139,7 +139,7 @@ fn main() {
             );
         }
 
-        // get time diagnostic information and display information
+        // get and display framerate diagnostic information
         t += dt;
         let new_time = Instant::now();
         let frame_time = new_time.duration_since(time).subsec_nanos() as f32 / 1.0e6;

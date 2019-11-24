@@ -9,6 +9,7 @@ pub struct Plot {
 }
 
 impl Plot {
+    /// Create a new plotting object with `size` slots for data points
     pub fn new(size: usize) -> Plot {
         Plot {
             last: 0,
@@ -16,14 +17,14 @@ impl Plot {
         }
     }
 
-    /// adding a point to the cyclic buffer
+    /// add a point to the cyclic buffer
     pub fn add_point(&mut self, y: f32) {
         self.data[self.last] = y;
         self.last = (self.last + 1) % self.data.len();
     }
 
-    /// draws the plot to the window. (x,y) is the starting corner, dx is the horizontal distance
-    /// between points, dy is the scale of the data values to screen values.
+    /// draw the plot to the window. (x,y) is the starting corner, dx is the horizontal distance
+    /// between points, dy is the scaling factor of the data values to screen values.
     pub fn draw(&self, w: &mut Window, color: &Point3<f32>, x: f32, y: f32, dx: f32, dy: f32) {
         for i in 0..(self.data.len() - 1) {
             let x0 = x + dx * i as f32;

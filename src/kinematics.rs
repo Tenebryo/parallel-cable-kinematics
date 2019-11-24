@@ -1,4 +1,4 @@
-use na::{UnitQuaternion, Vector3};
+use na::{Unit, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use serde_json;
 
@@ -6,10 +6,11 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
 
+/// Simple struct to handle deserialization of a configuration file
 #[derive(Deserialize)]
 struct RobotConfiguration {
-    frame_anchors: Vec<[f32; 3]>,
-    stylus_anchors: Vec<[f32; 3]>,
+    /// [[pivot], [axis], [end]]
+    cables: Vec<[[f32; 3]; 3]>,
     stylus_dims: [f32; 3],
 }
 
@@ -32,10 +33,85 @@ impl Pose {
     }
 }
 
+/// Represents a cable system including the pivoting pulley
+pub struct Cable {
+    pivot: Vector3<f32>,
+    axis: Vector3<f32>,
+    end: Vector3<f32>,
+}
+
+impl Cable {
+    pub fn new(pivot: Vector3<f32>, axis: Vector3<f32>, end: Vector3<f32>) -> Cable {
+        Cable { pivot, axis, end }
+    }
+
+    /// returns (<length>, <segments>)
+    fn calculate_pulley_state(&self, pose: &Pose) -> (f32, Vec<(Vector3<f32>, Vector3<f32>)>) {
+
+        let end = pose.transform_vector(&self.end);
+        let axis = self.axis;
+        let pivot = self.pivot;
+
+        let rad = axis.norm();
+
+        // move pivot to origin
+        let direct = end - pivot;
+        // project onto the plane defined by axis
+        let planar = direct - (direct.dot(&axis) / (rad * rad)) * axis;
+
+        // scale planar vector to the pulley radius to get the pulley center relative to origin.
+        let pulley_center = (rad / planar.norm()) * planar;
+
+        // Get the axis that the pulley rotates around
+        let pulley_axis = pulley_center.cross(&axis);
+
+        // iterate to get angle
+        let mut off_pulley = direct;
+        let mut angle_est = 0.0;
+
+        for _ in 0..4 {
+            let angle_rotation =
+                UnitQuaternion::from_axis_angle(&Unit::new_normalize(pulley_axis), -angle_est);
+            let new_point = pivot + pulley_center - angle_rotation.transform_vector(&pulley_center);
+            // compute vector from pulley point to end point
+            off_pulley = end - new_point;
+            angle_est = off_pulley.angle(&axis);
+        }
+
+        // calculate the length of the wire
+        let len = off_pulley.norm() + angle_est * rad;
+
+        // generate line segments that make up the wire length
+        let mut seg = Vec::with_capacity(8);
+        let mut last_point = pivot;
+        for i in 0..7 {
+            let rot = UnitQuaternion::from_axis_angle(
+                &Unit::new_normalize(pulley_axis),
+                i as f32 * -angle_est / 7.0,
+            );
+            let new_point = pivot + pulley_center - rot.transform_vector(&pulley_center);
+            seg.push((last_point, new_point));
+            last_point = new_point;
+        }
+        seg.push((last_point, end));
+
+        (len, seg)
+    }
+
+    /// computes the length of the cable including the bit around the pulley
+    pub fn len(&self, pose: &Pose) -> f32 {
+        self.calculate_pulley_state(pose).0
+    }
+
+    pub fn segments(&self, pose: &Pose) -> Vec<(Vector3<f32>, Vector3<f32>)> {
+        self.calculate_pulley_state(pose).1
+    }
+}
+
+/// struct that computes 
 pub struct Kinematics {
-    frame_anchors: Vec<Vector3<f32>>,
-    stylus_anchors: Vec<Vector3<f32>>,
-    pub size: [f32; 3],
+    cables : Vec<Cable>,
+    pub stylus_size: [f32; 3],
 }
 
 impl Kinematics {
@@ -49,22 +125,19 @@ impl Kinematics {
             serde_json::from_str(&buf).expect("Unable to parse robot configuration");
 
         Kinematics {
-            frame_anchors: rc
-                .frame_anchors
-                .iter()
-                .map(|&[x, y, z]| Vector3::new(x, y, z))
+            cables : rc.cables.iter()
+                .map(|&[[px, py, pz], [ax, ay, az], [ex, ey, ez]]| Cable::new(
+                    Vector3::new(px, py, pz),
+                    Vector3::new(ax, ay, az),
+                    Vector3::new(ex, ey, ez)
+                ))
                 .collect::<Vec<_>>(),
-            stylus_anchors: rc
-                .stylus_anchors
-                .iter()
-                .map(|&[x, y, z]| Vector3::new(x, y, z))
-                .collect::<Vec<_>>(),
-            size: rc.stylus_dims,
+            stylus_size: rc.stylus_dims,
         }
     }
 
     pub fn num_cables(&self) -> usize {
-        self.frame_anchors.len()
+        self.cables.len()
     }
 
     pub fn forward(&self, _cable_lengths: &Vec<f32>, _previous_pose: &Pose) -> Pose {
@@ -72,19 +145,10 @@ impl Kinematics {
     }
 
     pub fn inverse(&self, pose: &Pose) -> Vec<f32> {
-        self.stylus_anchors
-            .iter()
-            .map(|a| pose.transform_vector(a))
-            .zip(self.frame_anchors.iter())
-            .map(|(s, &f)| (f - s).norm())
-            .collect::<Vec<_>>()
+        self.cables.iter().map(|c| c.len(pose)).collect()
     }
 
-    pub fn cable_ends(&self, pose: &Pose) -> Vec<(Vector3<f32>, Vector3<f32>)> {
-        self.stylus_anchors
-            .iter()
-            .map(|a| pose.transform_vector(a))
-            .zip(self.frame_anchors.iter().cloned())
-            .collect::<Vec<_>>()
+    pub fn cable_segments(&self, pose: &Pose) -> Vec<(Vector3<f32>, Vector3<f32>)> {
+        self.cables.iter().map(|c| c.segments(pose)).flatten().collect::<Vec<_>>()
     }
 }

@@ -239,7 +239,7 @@ impl Kinematics {
     }
 
     pub fn forward(&self, _cable_lengths: &Vec<f32>, _previous_pose: &Pose) -> Pose {
-        const SGD_ROUNDS : usize = 8;
+        const SGD_ROUNDS : usize = 16;
         let mut rate = 0.1;
 
         let mut pose = Vec::with_capacity(6);
@@ -249,18 +249,26 @@ impl Kinematics {
 
         let axis = _previous_pose.orientation.scaled_axis();
 
+        pose.push(1.0);
         pose.push(axis[0] as f64);
         pose.push(axis[1] as f64);
         pose.push(axis[2] as f64);
 
         for _ in 0..SGD_ROUNDS {
             let error_func = |l : &[F]| {
-                if let &[tx, ty, tz, ux, uy, uz] = l {
+                if let &[tx, ty, tz, qw, qx, qy, qz] = l {
+
+                    let mag = (qw*qw + qx*qx + qy*qy + qz*qz).sqrt();
                     
+                    let ux = qx / mag;
+                    let uy = qy / mag;
+                    let uz = qz / mag;
+
+
                     let mut loss = F::cst(0.0);
                     for (i,c) in self.cables.iter().enumerate() {
                         let err = c.calculate_pulley_state(tx, ty, tz, ux, uy, uz).0 - F::cst(_cable_lengths[i]);
-                        loss += if i >= 3 {4.} else {1.} * err * err;
+                        loss += err * err;
                     }
 
                     loss
@@ -271,15 +279,15 @@ impl Kinematics {
 
             let g = grad(error_func, &pose);
 
-            for i in 0..6 {
-                pose[i] -= rate * g[i];
+            for i in 0..7 {
+                pose[i] -= if i >= 3 {100.} else {1.} * rate * g[i];
             }
 
-            rate *= 0.1;
+            rate *= 0.5;
         }
         let mut r = Pose::new();
         r.position = Vector3::new(pose[0] as f32, pose[1] as f32, pose[2] as f32);
-        r.orientation = UnitQuaternion::new(Vector3::new(pose[3] as f32, pose[4] as f32, pose[5] as f32));
+        r.orientation = UnitQuaternion::new(Vector3::new(pose[4] as f32, pose[5] as f32, pose[6] as f32));
 
         r
     }

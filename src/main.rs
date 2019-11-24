@@ -1,10 +1,10 @@
+extern crate autodiff;
 extern crate kiss3d;
 extern crate nalgebra as na;
 extern crate rand;
 extern crate rand_distr;
 extern crate serde;
 extern crate serde_json;
-extern crate autodiff;
 
 use kiss3d::light::Light;
 use kiss3d::window::Window;
@@ -29,6 +29,7 @@ fn main() {
     let mut rng = thread_rng();
     let error_mean_distr = Normal::new(0.0, NOISE_BIAS).unwrap();
     let error_std_distr = Normal::new(0.0, NOISE_SCALE).unwrap();
+    let small_rand = Normal::new(0.0, 0.01).unwrap();
 
     // initialize kinematic model from a configuration file
     let kin = Kinematics::new(&Path::new("robot_conf.json"));
@@ -42,7 +43,11 @@ fn main() {
     let mut c = window.add_cube(kin.stylus_size[0], kin.stylus_size[1], kin.stylus_size[2]);
     c.set_color(1.0, 0.0, 0.0);
     let sf = 1.02;
-    let mut est = window.add_cube(sf * kin.stylus_size[0], sf * kin.stylus_size[1], sf * kin.stylus_size[2]);
+    let mut est = window.add_cube(
+        sf * kin.stylus_size[0],
+        sf * kin.stylus_size[1],
+        sf * kin.stylus_size[2],
+    );
     est.set_color(0.5, 0.5, 1.0);
     est.set_lines_width(4.0);
     est.set_surface_rendering_activation(false);
@@ -75,7 +80,11 @@ fn main() {
 
     // last estimated pose. We start from a known location
     let mut est_pose = Pose::new();
-    est_pose.orientation = UnitQuaternion::new(Vector3::new(1.0, 1.1, -1.1));
+    est_pose.orientation = UnitQuaternion::new(Vector3::new(
+        small_rand.sample(&mut rng),
+        small_rand.sample(&mut rng),
+        small_rand.sample(&mut rng),
+    ));
 
     // main render loop
     while window.render() {
@@ -111,7 +120,7 @@ fn main() {
         est.set_local_rotation(est_pose.orientation);
         est.set_local_translation(Translation3::from(est_pose.position));
 
-        // draw the cables
+        // draw the cables from the true pose
         for (p1, p2) in kin.cable_segments(&pose) {
             window.draw_line(
                 &Point3::from(p1),
@@ -119,7 +128,14 @@ fn main() {
                 &Point3::new(1.0, 1.0, 1.0),
             );
         }
-        
+        // draw the cables from the estimated pose
+        for (p1, p2) in kin.cable_segments(&est_pose) {
+            window.draw_line(
+                &Point3::from(p1),
+                &Point3::from(p2),
+                &Point3::new(0.5, 0.5, 1.0),
+            );
+        }
         // update and draw cable length plots
         for (i, &l) in cable_lengths.iter().enumerate() {
             cable_length_plots[i].add_point(l);

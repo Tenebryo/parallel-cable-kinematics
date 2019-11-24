@@ -1,4 +1,5 @@
-use na::{Unit, UnitQuaternion, Vector3};
+use autodiff::{grad, Float, F};
+use na::{Unit, UnitQuaternion, Quaternion, Vector3};
 use serde::Deserialize;
 use serde_json;
 
@@ -28,6 +29,7 @@ impl Pose {
         }
     }
 
+    #[allow(dead_code)]
     pub fn transform_vector(&self, v: &Vector3<f32>) -> Vector3<f32> {
         self.position + self.orientation.transform_vector(v)
     }
@@ -46,24 +48,64 @@ impl Cable {
     }
 
     /// returns (<length>, <segments>)
-    fn calculate_pulley_state(&self, pose: &Pose) -> (f32, Vec<(Vector3<f32>, Vector3<f32>)>) {
+    pub fn calculate_pulley_state(
+        &self,
+        tx: F,
+        ty: F,
+        tz: F,
+        ux: F,
+        uy: F,
+        uz: F,
+    ) -> (F, Vec<(Vector3<f32>, Vector3<f32>)>) {
+        let end = {
+            let end = Vector3::new(
+                F::cst(self.end[0]),
+                F::cst(self.end[1]),
+                F::cst(self.end[2]),
+            );
 
-        let end = pose.transform_vector(&self.end);
-        let axis = self.axis;
-        let pivot = self.pivot;
+            let th = (ux * ux + uy * uy + uz * uz).sqrt();
 
-        let rad = axis.norm();
+            let cos = th.cos();
+            let sin = th.sin();
+            let one = F::cst(1.0);
+
+            let ux = ux / th;
+            let uy = uy / th;
+            let uz = uz / th;
+
+            Vector3::new(
+                tx + (cos + ux * ux * (one - cos)) * end[0]
+                    + (ux * uy * (one - cos) - uz * sin) * end[1]
+                    + (ux * uz * (one - cos) + uy * sin) * end[2],
+                ty + (uy * ux * (one - cos) + uz * sin) * end[0]
+                    + (cos + uy * uy * (one - cos)) * end[1]
+                    + (uy * uz * (one - cos) - ux * sin) * end[2],
+                tz + (uz * ux * (one - cos) - uy * sin) * end[0]
+                    + (uz * uy * (one - cos) + ux * sin) * end[1]
+                    + (cos + uz * uz * (one - cos)) * end[2],
+            )
+        };
+        let axis = Vector3::new(
+            F::cst(self.axis[0]),
+            F::cst(self.axis[1]),
+            F::cst(self.axis[2]),
+        );
+        let pivot = Vector3::new(
+            F::cst(self.pivot[0]),
+            F::cst(self.pivot[1]),
+            F::cst(self.pivot[2]),
+        );
+
+        let rad = axis.dot(&axis).sqrt();
 
         // move pivot to origin
         let direct = end - pivot;
         // project onto the plane defined by axis
-        let planar = direct - (direct.dot(&axis) / (rad * rad)) * axis;
+        let planar = direct - axis * (direct.dot(&axis) / (rad * rad));
 
         // scale planar vector to the pulley radius to get the pulley center relative to origin.
-        let pulley_center = (rad / planar.norm()) * planar;
-
-        // Get the axis that the pulley rotates around
-        let pulley_axis = pulley_center.cross(&axis);
+        let pulley_center = planar * (rad / planar.dot(&planar).sqrt());
 
         let center_to_end = end - (pivot + pulley_center);
 
@@ -79,7 +121,7 @@ impl Cable {
             let i1 = (ey2 * r2 * (ex2 + ey2 - r2)).sqrt();
             let i2 = ex2 + ey2;
 
-            if ey >= 0.0 {
+            if ey >= F::cst(0.0) {
                 (i0 - i1) / i2
             } else {
                 (i0 + i1) / i2
@@ -89,47 +131,80 @@ impl Cable {
         let y = ex.signum() * (rad * rad - x * x).sqrt();
 
         // calculate the pulley contact angle and the tangent point in 3D space
-        let angle_est = y.atan2(-x);
-
-        let tangent_point = pivot + (1.0 + x / rad) * pulley_center + (y / rad) * axis;
+        let angle = y.atan2(-x);
+        let tangent_point : Vector3<F> = pivot + (pulley_center * (1.0 + x / rad)) + (axis * (y / rad));
 
         // calculate the length of the wire
-        let len = (end - tangent_point).norm() + angle_est * rad;
-
+        let straight_wire = end - tangent_point;
+        let len = straight_wire.dot(&straight_wire).sqrt() + angle * rad;
 
         // generate line segments that make up the wire length
-        const NUM_PULLEY_SEGMENTS : usize = 7;
+        const NUM_PULLEY_SEGMENTS: usize = 7;
+
+        // Get the axis that the pulley rotates around
+        let pulley_center = Vector3::new(
+            pulley_center[0].x as f32,
+            pulley_center[1].x as f32,
+            pulley_center[2].x as f32,
+        );
+        let pulley_axis = pulley_center.cross(&self.axis);
 
         let mut seg = Vec::with_capacity(NUM_PULLEY_SEGMENTS + 1);
-        let mut last_point = pivot;
+        let mut last_point = self.pivot;
+
+        let angle = angle.x as f32;
 
         for i in 0..NUM_PULLEY_SEGMENTS {
             let rot = UnitQuaternion::from_axis_angle(
                 &Unit::new_normalize(pulley_axis),
-                i as f32 * -angle_est / (NUM_PULLEY_SEGMENTS as f32 - 1.0),
+                i as f32 * -angle / (NUM_PULLEY_SEGMENTS as f32 - 1.0),
             );
-            let new_point = pivot + pulley_center - rot.transform_vector(&pulley_center);
+            let new_point = self.pivot + pulley_center - rot.transform_vector(&pulley_center);
             seg.push((last_point, new_point));
             last_point = new_point;
         }
-        seg.push((tangent_point, end));
+        seg.push((last_point, Vector3::new(
+            end[0].x as f32,
+            end[1].x as f32,
+            end[2].x as f32,
+        )));
 
         (len, seg)
     }
 
     /// computes the length of the cable including the bit around the pulley
     pub fn len(&self, pose: &Pose) -> f32 {
-        self.calculate_pulley_state(pose).0
+        let tx = F::cst(pose.position[0]);
+        let ty = F::cst(pose.position[1]);
+        let tz = F::cst(pose.position[2]);
+
+        let axis = pose.orientation.scaled_axis();
+
+        let ux = F::cst(axis[0]);
+        let uy = F::cst(axis[1]);
+        let uz = F::cst(axis[2]);
+
+        self.calculate_pulley_state(tx, ty, tz, ux, uy, uz).0.x as f32
     }
 
     pub fn segments(&self, pose: &Pose) -> Vec<(Vector3<f32>, Vector3<f32>)> {
-        self.calculate_pulley_state(pose).1
+        let tx = F::cst(pose.position[0]);
+        let ty = F::cst(pose.position[1]);
+        let tz = F::cst(pose.position[2]);
+
+        let axis = pose.orientation.scaled_axis();
+
+        let ux = F::cst(axis[0]);
+        let uy = F::cst(axis[1]);
+        let uz = F::cst(axis[2]);
+
+        self.calculate_pulley_state(tx, ty, tz, ux, uy, uz).1
     }
 }
 
-/// struct that computes 
+/// struct that computes
 pub struct Kinematics {
-    cables : Vec<Cable>,
+    cables: Vec<Cable>,
     pub stylus_size: [f32; 3],
 }
 
@@ -144,12 +219,16 @@ impl Kinematics {
             serde_json::from_str(&buf).expect("Unable to parse robot configuration");
 
         Kinematics {
-            cables : rc.cables.iter()
-                .map(|&[[px, py, pz], [ax, ay, az], [ex, ey, ez]]| Cable::new(
-                    Vector3::new(px, py, pz),
-                    Vector3::new(ax, ay, az),
-                    Vector3::new(ex, ey, ez)
-                ))
+            cables: rc
+                .cables
+                .iter()
+                .map(|&[[px, py, pz], [ax, ay, az], [ex, ey, ez]]| {
+                    Cable::new(
+                        Vector3::new(px, py, pz),
+                        Vector3::new(ax, ay, az),
+                        Vector3::new(ex, ey, ez),
+                    )
+                })
                 .collect::<Vec<_>>(),
             stylus_size: rc.stylus_dims,
         }
@@ -160,7 +239,49 @@ impl Kinematics {
     }
 
     pub fn forward(&self, _cable_lengths: &Vec<f32>, _previous_pose: &Pose) -> Pose {
-        Pose::new()
+        const SGD_ROUNDS : usize = 8;
+        let mut rate = 0.1;
+
+        let mut pose = Vec::with_capacity(6);
+        pose.push(_previous_pose.position[0] as f64);
+        pose.push(_previous_pose.position[1] as f64);
+        pose.push(_previous_pose.position[2] as f64);
+
+        let axis = _previous_pose.orientation.scaled_axis();
+
+        pose.push(axis[0] as f64);
+        pose.push(axis[1] as f64);
+        pose.push(axis[2] as f64);
+
+        for _ in 0..SGD_ROUNDS {
+            let error_func = |l : &[F]| {
+                if let &[tx, ty, tz, ux, uy, uz] = l {
+                    
+                    let mut loss = F::cst(0.0);
+                    for (i,c) in self.cables.iter().enumerate() {
+                        let err = c.calculate_pulley_state(tx, ty, tz, ux, uy, uz).0 - F::cst(_cable_lengths[i]);
+                        loss += if i >= 3 {4.} else {1.} * err * err;
+                    }
+
+                    loss
+                } else {
+                    F::cst(0.0)
+                }
+            };
+
+            let g = grad(error_func, &pose);
+
+            for i in 0..6 {
+                pose[i] -= rate * g[i];
+            }
+
+            rate *= 0.1;
+        }
+        let mut r = Pose::new();
+        r.position = Vector3::new(pose[0] as f32, pose[1] as f32, pose[2] as f32);
+        r.orientation = UnitQuaternion::new(Vector3::new(pose[3] as f32, pose[4] as f32, pose[5] as f32));
+
+        r
     }
 
     pub fn inverse(&self, pose: &Pose) -> Vec<f32> {
@@ -168,6 +289,10 @@ impl Kinematics {
     }
 
     pub fn cable_segments(&self, pose: &Pose) -> Vec<(Vector3<f32>, Vector3<f32>)> {
-        self.cables.iter().map(|c| c.segments(pose)).flatten().collect::<Vec<_>>()
+        self.cables
+            .iter()
+            .map(|c| c.segments(pose))
+            .flatten()
+            .collect::<Vec<_>>()
     }
 }

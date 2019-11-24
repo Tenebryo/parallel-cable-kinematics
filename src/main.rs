@@ -4,6 +4,7 @@ extern crate rand;
 extern crate rand_distr;
 extern crate serde;
 extern crate serde_json;
+extern crate autodiff;
 
 use kiss3d::light::Light;
 use kiss3d::window::Window;
@@ -21,11 +22,12 @@ mod plot;
 use kinematics::{Kinematics, Pose};
 use plot::Plot;
 
-const NOISE_SCALE: f32 = 0.002;
+const NOISE_BIAS: f32 = 0.0;
+const NOISE_SCALE: f32 = 0.0;
 
 fn main() {
     let mut rng = thread_rng();
-    let error_mean_distr = Normal::new(0.0, NOISE_SCALE).unwrap();
+    let error_mean_distr = Normal::new(0.0, NOISE_BIAS).unwrap();
     let error_std_distr = Normal::new(0.0, NOISE_SCALE).unwrap();
 
     // initialize kinematic model from a configuration file
@@ -61,7 +63,7 @@ fn main() {
         .map(|_| {
             Normal::new(
                 error_mean_distr.sample(&mut rng),
-                (error_std_distr.sample(&mut rng) as f32).abs() + 0.01,
+                (error_std_distr.sample(&mut rng) as f32).abs(),
             )
             .unwrap()
         })
@@ -72,7 +74,8 @@ fn main() {
     let dt = 0.01f32;
 
     // last estimated pose. We start from a known location
-    let mut est_pose = pose.clone();
+    let mut est_pose = Pose::new();
+    est_pose.orientation = UnitQuaternion::new(Vector3::new(1.0, 1.1, -1.1));
 
     // main render loop
     while window.render() {

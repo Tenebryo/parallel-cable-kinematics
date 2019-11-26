@@ -1,4 +1,4 @@
-# parallel-cable-kinematics
+# Parallel Cable Kinematics
 Forward and inverse kinematics for an cable-driven parallel robot. 
 The kinematics assume that the cables are guided by pulleys at each of the stationary anchors.
 

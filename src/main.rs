@@ -26,6 +26,7 @@ const NOISE_BIAS: f32 = 0.0001;
 const NOISE_SCALE: f32 = 0.00001;
 
 fn main() {
+    // Gaussian random number generators for measurement noise generation
     let mut rng = thread_rng();
     let error_mean_distr = Normal::new(0.0, NOISE_BIAS).unwrap();
     let error_std_distr = Normal::new(0.0, NOISE_SCALE).unwrap();
@@ -68,6 +69,8 @@ fn main() {
     let mut total_error_plot = Plot::new(data_points);
 
     let mut frame_time_plot = Plot::new(data_points);
+
+    // initialized error distributions
     let error_distrs = (0..(kin.num_cables()))
         .map(|_| {
             Normal::new(
@@ -105,7 +108,7 @@ fn main() {
         pose.orientation =
             UnitQuaternion::from_axis_angle(&Unit::new_normalize(Vector3::new(x, y, z)), 0.5);
 
-        let cable_lengths = kin.inverse(&pose);
+        let cable_lengths = kin.inverse_pose(&pose);
 
         // add error to the cable lengths
         let cable_lengths_noisy = cable_lengths
@@ -115,7 +118,7 @@ fn main() {
             .collect::<Vec<_>>();
 
         // update estimated pose with the new (noisy) cable lengths
-        est_pose = kin.forward(&cable_lengths_noisy, &est_pose);
+        est_pose = kin.forward_pose(&cable_lengths_noisy, &est_pose);
 
         // calculate position and orientation error. Orientation error should be scaled
         // by some amount because angles and lengths can't easily be compared

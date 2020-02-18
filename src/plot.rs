@@ -2,7 +2,7 @@ use kiss3d::window::Window;
 use na::{Point2, Point3};
 
 /// Minimal 2D plotting utility using KISS3D
-/// Displays in a EKG style with
+/// Displays in a EKG style with a fixed time step
 pub struct Plot {
     last: usize,
     data: Vec<f32>,

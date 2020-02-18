@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
 
-/// Simple struct to handle deserialization of a configuration file
+/// Simple structure to handle deserialization of a configuration file
 #[derive(Deserialize)]
 struct RobotConfiguration {
     /// [[pivot], [axis], [end]]
@@ -15,6 +15,9 @@ struct RobotConfiguration {
     stylus_dims: [f32; 3],
 }
 
+/// A structure representing the position and orientation of the end effector of a robot
+/// The pose of the end effector is defined by the position of the center (a 3D vector)
+/// and a rotation represented around 
 #[derive(Copy, Clone, PartialEq)]
 pub struct Pose {
     pub position: Vector3<f32>,
@@ -22,6 +25,7 @@ pub struct Pose {
 }
 
 impl Pose {
+    /// create a pose in the zero state
     pub fn new() -> Pose {
         Pose {
             position: Vector3::zeros(),
@@ -29,13 +33,15 @@ impl Pose {
         }
     }
 
+    /// utility function that transforms a point from the end effector local coordinate space
+    /// to the global space defined by the given pose.
     #[allow(dead_code)]
     pub fn transform_vector(&self, v: &Vector3<f32>) -> Vector3<f32> {
         self.position + self.orientation.transform_vector(v)
     }
 }
 
-/// Represents a cable system including the pivoting pulley
+/// A structure representing a single cable system including the pivoting pulley
 pub struct Cable {
     pivot: Vector3<f32>,
     axis: Vector3<f32>,
@@ -47,16 +53,14 @@ impl Cable {
         Cable { pivot, axis, end }
     }
 
-    /// returns (<length>, <segments>)
+    /// An function for internal use that calculates the length and segments of each of 
+    /// the cables. returns (<length>, <segments>)
+    /// Arguments: t_: pose translation (3d vector)
+    ///            u_: pose rotation (axis-angle quaternion)
     pub fn calculate_pulley_state(
-        &self,
-        tx: F,
-        ty: F,
-        tz: F,
-        ux: F,
-        uy: F,
-        uz: F,
+        &self, tx: F, ty: F, tz: F, ux: F, uy: F, uz: F,
     ) -> (F, Vec<(Vector3<f32>, Vector3<f32>)>) {
+        // pose transformation using differentiable types
         let end = {
             let end = Vector3::new(
                 F::cst(self.end[0]),
@@ -64,6 +68,7 @@ impl Cable {
                 F::cst(self.end[2]),
             );
 
+            // quaternion normalization
             let th = (ux * ux + uy * uy + uz * uz).sqrt();
 
             let cos = th.cos();
@@ -74,6 +79,7 @@ impl Cable {
             let uy = uy / th;
             let uz = uz / th;
 
+            // rotation and translation
             Vector3::new(
                 tx + (cos + ux * ux * (one - cos)) * end[0]
                     + (ux * uy * (one - cos) - uz * sin) * end[1]
@@ -154,6 +160,7 @@ impl Cable {
 
         let angle = angle.x as f32;
 
+        // generate some line segments for visualization
         for i in 0..NUM_PULLEY_SEGMENTS {
             let rot = UnitQuaternion::from_axis_angle(
                 &Unit::new_normalize(pulley_axis),
@@ -173,7 +180,7 @@ impl Cable {
     }
 
     /// computes the length of the cable including the bit around the pulley
-    pub fn len(&self, pose: &Pose) -> f32 {
+    pub fn length(&self, pose: &Pose) -> f32 {
         let tx = F::cst(pose.position[0]);
         let ty = F::cst(pose.position[1]);
         let tz = F::cst(pose.position[2]);
@@ -187,6 +194,8 @@ impl Cable {
         self.calculate_pulley_state(tx, ty, tz, ux, uy, uz).0.x as f32
     }
 
+    /// calculates the current state of this cable from the current pose of
+    /// the robot and 
     pub fn segments(&self, pose: &Pose) -> Vec<(Vector3<f32>, Vector3<f32>)> {
         let tx = F::cst(pose.position[0]);
         let ty = F::cst(pose.position[1]);
@@ -202,13 +211,22 @@ impl Cable {
     }
 }
 
-/// struct that computes
+/// a structure representing a robot configuration allowing the computation of forward and
+/// inverse kinematics
 pub struct Kinematics {
     cables: Vec<Cable>,
     pub stylus_size: [f32; 3],
 }
 
 impl Kinematics {
+    /// Create a new kinematics solver for the robot described in the configuration file
+    /// provided. The configuration file is a json object that describes the robot in the
+    /// starting configuration and has two keys: 
+    /// "cables": an array of triples of 3D vectors. 
+    ///     Each triple represent one isolated cable system by its frame anchor point, 
+    ///     effector anchor point, and pulley vector (the pulley vector magnitude describes the
+    ///     pulley radius and the axis defines the axis of rotation).
+    /// "stylus_dims": A 3D vector describing the size of the effector for visualization purposes.
     pub fn new(path: &Path) -> Kinematics {
         let mut buf = String::new();
         let mut f = File::open(path).expect("Unable to open robot configuration");
@@ -234,14 +252,19 @@ impl Kinematics {
         }
     }
 
+    /// Returns the number of cables present in this robot
     pub fn num_cables(&self) -> usize {
         self.cables.len()
     }
 
-    pub fn forward(&self, _cable_lengths: &Vec<f32>, _previous_pose: &Pose) -> Pose {
+    /// computes the pose (position and orientation) of the end effector given a measurement
+    /// of the cable lengths, as well as a previously know pose. The better an estimate the
+    /// previous pose is of the current pose, the better the resulting accuracy.
+    pub fn forward_pose(&self, _cable_lengths: &Vec<f32>, _previous_pose: &Pose) -> Pose {
         const SGD_ROUNDS : usize = 32;
         let mut rate = 0.1;
 
+        // set the initial condition of the gradient descent
         let mut pose = Vec::with_capacity(6);
         pose.push(_previous_pose.position[0] as f64);
         pose.push(_previous_pose.position[1] as f64);
@@ -255,6 +278,9 @@ impl Kinematics {
         pose.push(axis[2] as f64);
 
         for _ in 0..SGD_ROUNDS {
+            // this function defines the error between the estimated and measured cable lengths
+            // this function is implemented with an automatic differentiation type such that the
+            // gradient can be calculated automatically later
             let error_func = |l : &[F]| {
                 if let &[tx, ty, tz, qw, qx, qy, qz] = l {
 
@@ -277,8 +303,11 @@ impl Kinematics {
                 }
             };
 
+            // we compute the gradient of the error...
             let g = grad(error_func, &pose);
 
+            // ... then we tweek the estimated pose parameters (position and orientation)
+            // in order to reduce the error from the measured 
             for i in 0..7 {
                 pose[i] -= if i >= 3 {500.} else {1.} * rate * g[i];
             }
@@ -292,10 +321,13 @@ impl Kinematics {
         r
     }
 
-    pub fn inverse(&self, pose: &Pose) -> Vec<f32> {
-        self.cables.iter().map(|c| c.len(pose)).collect()
+    /// calculates the cable lengths for a given pose (position and orientation)
+    pub fn inverse_pose(&self, pose: &Pose) -> Vec<f32> {
+        self.cables.iter().map(|c| c.length(pose)).collect()
     }
 
+    /// Calculates the positions of each cable in 3D and provides a list of line segments
+    /// representing an approximation of each cable for visualization purposes.
     pub fn cable_segments(&self, pose: &Pose) -> Vec<(Vector3<f32>, Vector3<f32>)> {
         self.cables
             .iter()
